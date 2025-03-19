@@ -1,4 +1,7 @@
 from midiutil import MIDIFile
+from intomido.messages import Message
+from mido import MidiFile, MidiTrack
+import mido
 
 class BasicComposer:
     def __init__(self, tempo=120, channel=0, volume=100, program=0):
@@ -28,16 +31,13 @@ class BasicComposer:
 
     def add_notes_fixed_timestep(self, notes, timestep='1/4', mode='tie', repeataslong=False):
         """
-        Aggiunge una sequenza di note al file MIDI.
+        Adds a sequence of notes to the MIDIFile object
 
-        Parametri:
-          - notes: lista di note. Gli elementi possono essere:
-                   * un valore numerico (o convertibile a int) per indicare il pitch della nota;
-                   * il carattere '-' per indicare che la nota precedente va "legata" (tie) e la sua durata deve estendersi.
-          - timestep: durata base di ogni elemento espresso come frazione (es. '1/8' per un’ottava nota).
-          - mode: modalità di interpretazione dei trattini.
-                  * 'tie' (default): ogni trattino dopo una nota estende la durata della nota precedente.
-                  * 'rest': il trattino viene interpretato come una pausa (rest), incrementando il tempo senza suonare.
+        Parmeters:
+          :param notes: List of notes
+                   * a single numerical value (must convert to int) which is the midi scale pitch of the note;
+                   * a single character, supported are: "-" which means repeat past note, and "_" which means pause.
+          :param timestep: a single note duration, which is fixed!
         """
         base_duration = self._parse_timestep(timestep)
         i = 0
@@ -82,3 +82,88 @@ class BasicComposer:
         """
         with open(filename, "wb") as f:
             self.midi.writeFile(f)
+
+
+class Composer:
+    def __init__(self, ticks_per_beat=480, tempo=500000):
+        # Ticks per beat e tempo (microsecond per beat) usati per calcolare le durate
+        self.ticks_per_beat = ticks_per_beat
+        self.tempo = tempo
+        self.messages = []  # lista di Message personalizzati
+        self.current_time_a = 0  # tempo corrente per la modalità 'append'
+
+    def _get_step_ticks(self, step):
+        """Converte una stringa di step (es. '1/8') in ticks"""
+        num, denom = map(int, step.split('/'))
+        # Calcola i tick per step: partiamo dal presupposto che 1/4 equivale a 1 beat (ticks_per_beat)
+        beat_fraction = num / denom
+        # Se 1/4 = ticks_per_beat allora 1/8 = ticks_per_beat/2, ecc.
+        return int(self.ticks_per_beat * (beat_fraction / 0.25))
+
+    def add_fv_pattern(self, pattern, step='1/8', mode='a', channel=0):
+        """Adds a note pattern:
+          - A number indicates a note.
+          - '-' indicates to repeat the previous note.
+          - '_' is interpreted as a pause.
+        The 'mode' parameter:
+          - 'a': appends after the last message (cumulative timeline modification)
+          - 'o': overlays (uses time=0 as base)"""
+
+        step_ticks = self._get_step_ticks(step)
+        # Determina il punto di partenza in base alla modalità
+        if mode == 'a':
+            start_time = self.current_time_a
+        else:  # mode 'o' (overlay)
+            start_time = 0
+
+        last_note = None
+        time_cursor = start_time
+        for elem in pattern:
+            if elem == '_':
+                time_cursor += step_ticks
+                continue
+            if elem == '-' and last_note is not None:
+                note = last_note
+            elif isinstance(elem, int):
+                note = elem
+                last_note = note
+            else:
+                # no - so skip
+                continue
+
+            # Crea il messaggio NOTE_ON in corrispondenza del time_cursor
+            msg_on = Message(note=note, time=time_cursor, velocity=64, action='on', channel=channel)
+            self.messages.append(msg_on)
+            msg_off = Message(note=note, time=time_cursor + step_ticks, velocity=64, action='off', channel=channel)
+            self.messages.append(msg_off)
+            time_cursor += step_ticks
+
+        # Se la modalità è 'a', aggiorna il current_time_a per future aggiunte
+        if mode == 'a':
+            self.current_time_a = time_cursor
+
+    def finalize(self, filename):
+        """Sorts messages by absolute time, converts them to delta time, and creates the MIDI file."""
+
+        # Ordina per tempo assoluto; in caso di parità, mettiamo prima i note_on
+        self.messages.sort(key=lambda m: (m.time, 0 if m.action == 'on' else 1))
+
+        track = MidiTrack()
+        mid = MidiFile(ticks_per_beat=self.ticks_per_beat)
+        mid.tracks.append(track)
+        # Imposta il tempo
+        track.append(mido.MetaMessage('set_tempo', tempo=self.tempo, time=0))
+
+        # Trasforma il tempo assoluto in delta time
+        last_time = 0
+        for m in self.messages:
+            delta = m.time - last_time
+            last_time = m.time
+            if m.action == 'on':
+                midi_msg = mido.Message('note_on', note=m.note, velocity=m.velocity, time=delta, channel=m.channel)
+            else:
+                midi_msg = mido.Message('note_off', note=m.note, velocity=m.velocity, time=delta, channel=m.channel)
+            track.append(midi_msg)
+
+        # Salva il file MIDI
+        mid.save(filename)
