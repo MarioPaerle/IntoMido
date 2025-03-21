@@ -13,7 +13,7 @@ class BasicComposer:
         """
         self.midi = MIDIFile(1)  # Un file MIDI con una sola traccia
         self.midi.addTempo(0, 0, tempo)
-        self.channel = channel
+        self.channel = channeldfsdf
         self.volume = volume
         self.current_time = 0.0  # Tempo corrente (in beats)
         self.midi.addProgramChange(0, channel, 0, program)
@@ -159,10 +159,7 @@ class Composer:
         for m in self.messages:
             delta = m.time - last_time
             last_time = m.time
-            if m.action == 'on':
-                midi_msg = mido.Message('note_on', note=m.note, velocity=m.velocity, time=delta, channel=m.channel)
-            else:
-                midi_msg = mido.Message('note_off', note=m.note, velocity=m.velocity, time=delta, channel=m.channel)
+            midi_msg = m.tomido(time=delta)
             track.append(midi_msg)
 
         # Salva il file MIDI

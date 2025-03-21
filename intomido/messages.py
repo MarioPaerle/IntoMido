@@ -18,5 +18,5 @@ class Message:
         return self.__str__()
 
     def tomido(self, time=None):
-        return mido.Message(self.action, note=self.note, velocity=self.velocity, time=self.time if time is None else time, channel=self.channel)
+        return mido.Message('note_'+self.action, note=self.note, velocity=self.velocity, time=self.time if time is None else time, channel=self.channel)
 
